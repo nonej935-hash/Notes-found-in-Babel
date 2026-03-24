@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pixel to String Encoder (32x24)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .pixel-grid {
+            display: grid;
+            grid-template-columns: repeat(32, 1fr);
+            gap: 1px;
+            background: #333;
+            border: 2px solid #333;
+        }
+        .pixel {
+            aspect-ratio: 1;
+            width: 100%;
+        }
+        #char-string {
+            word-break: break-all;
+            font-family: 'Courier New', Courier, monospace;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen p-4 md:p-8">
+    <div class="max-w-4xl mx-auto bg-white rounded-xl shadow-lg p-6">
+        <header class="mb-8 text-center">
+            <h1 class="text-3xl font-bold text-gray-800">Pixel Encoder</h1>
+            <p class="text-gray-600 mt-2">Convert PNG to a 768-character string (32x24, 6-bit color)</p>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <!-- Left Column: Upload and Controls -->
+            <div class="space-y-6">
+                <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-500 transition-colors cursor-pointer relative" id="drop-zone">
+                    <input type="file" id="file-input" accept="image/png, image/jpeg" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+                    <div class="text-gray-500" id="upload-prompt">
+                        <svg class="mx-auto h-12 w-12 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                        <p class="font-medium">Click or drag PNG here</p>
+                    </div>
+                    <img id="preview-img" class="hidden mx-auto max-h-48 rounded shadow" src="" alt="Preview">
+                </div>
+
+                <div class="bg-blue-50 p-4 rounded-lg border border-blue-100 text-sm text-blue-800">
+                    <h3 class="font-bold mb-1">Encoding Specs:</h3>
+                    <ul class="list-disc list-inside space-y-1">
+                        <li>Resolution: 32 x 24 (768 pixels)</li>
+                        <li>Color: 2-bits per channel (R,G,B) = 6 bits</li>
+                        <li>Range: 0 (black) to 3 (white) per channel</li>
+                        <li>Charset: 0-9, A-Z, a-z, -, + (64 chars)</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Right Column: Result -->
+            <div class="space-y-4">
+                <div class="flex justify-between items-end">
+                    <label class="block text-sm font-semibold text-gray-700 uppercase tracking-wider">Output String</label>
+                    <button id="copy-btn" class="text-xs bg-gray-800 text-white px-3 py-1 rounded hover:bg-black transition-colors">Copy String</button>
+                </div>
+                <div id="char-string" class="bg-gray-50 border border-gray-200 p-4 rounded text-xs min-h-[100px] text-gray-700">
+                    Upload an image to see the encoded string...
+                </div>
+                
+                <label class="block text-sm font-semibold text-gray-700 uppercase tracking-wider mt-4">Preview Grid (Quantized)</label>
+                <div id="pixel-preview" class="pixel-grid">
+                    <!-- 768 pixels will be injected here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden canvas for processing -->
+    <canvas id="process-canvas" width="32" height="24" class="hidden"></canvas>
+
+    <script>
+        const fileInput = document.getElementById('file-input');
+        const dropZone = document.getElementById('drop-zone');
+        const previewImg = document.getElementById('preview-img');
+        const uploadPrompt = document.getElementById('upload-prompt');
+        const canvas = document.getElementById('process-canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const charStringBox = document.getElementById('char-string');
+        const pixelPreview = document.getElementById('pixel-preview');
+        const copyBtn = document.getElementById('copy-btn');
+
+        // Character Set: 0-9 (10), A-Z (26), a-z (26), -, + (2) = 64 characters
+        const CHARSET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-+";
+
+        fileInput.addEventListener('change', handleFileUpload);
+
+        function handleFileUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    // Show preview
+                    previewImg.src = event.target.result;
+                    previewImg.classList.remove('hidden');
+                    uploadPrompt.classList.add('hidden');
+                    
+                    processImage(img);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function processImage(img) {
+            // Draw image to 32x24 canvas to resize/downsample
+            ctx.clearRect(0, 0, 32, 24);
+            ctx.drawImage(img, 0, 0, 32, 24);
+
+            const imageData = ctx.getImageData(0, 0, 32, 24).data;
+            let resultString = "";
+            pixelPreview.innerHTML = ""; // Clear preview
+
+            for (let i = 0; i < imageData.length; i += 4) {
+                // Get RGBA values
+                const r = imageData[i];
+                const g = imageData[i+1];
+                const b = imageData[i+2];
+
+                // Quantize to 0-3 (2 bits per channel)
+                // 0-63 -> 0, 64-127 -> 1, 128-191 -> 2, 192-255 -> 3
+                const r2 = Math.min(3, Math.floor(r / 64));
+                const g2 = Math.min(3, Math.floor(g / 64));
+                const b2 = Math.min(3, Math.floor(b / 64));
+
+                // Combine into 6 bits: R (high), G (mid), B (low)
+                // Format: RRGGBB
+                const sixBitVal = (r2 << 4) | (g2 << 2) | b2;
+                
+                // Map to character
+                resultString += CHARSET[sixBitVal];
+
+                // Add to visual preview grid
+                const pixelDiv = document.createElement('div');
+                pixelDiv.className = 'pixel';
+                // Convert back to 0-255 for preview display
+                const pr = r2 * 85;
+                const pg = g2 * 85;
+                const pb = b2 * 85;
+                pixelDiv.style.backgroundColor = `rgb(${pr}, ${pg}, ${pb})`;
+                pixelPreview.appendChild(pixelDiv);
+            }
+
+            charStringBox.textContent = resultString;
+        }
+
+        copyBtn.addEventListener('click', () => {
+            const text = charStringBox.textContent;
+            if (text.length > 0 && text.length <= 768) {
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                
+                const originalText = copyBtn.textContent;
+                copyBtn.textContent = "Copied!";
+                setTimeout(() => copyBtn.textContent = originalText, 2000);
+            }
+        });
+
+        // Simple Drag and Drop handling
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, e => {
+                e.preventDefault();
+                e.stopPropagation();
+            }, false);
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            if (files.length) {
+                fileInput.files = files;
+                handleFileUpload({target: fileInput});
+            }
+        });
+    </script>
+</body>
+</html>
+
