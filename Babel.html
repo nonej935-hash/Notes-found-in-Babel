@@ -188,7 +188,7 @@ async function generate() {
 }
 
 async function lookupFromInput() {
-  const val = document.getElementById('seed-area').value.trim();
+  const val = document.getElementById('seed-area').value.replace(/\s/g, '');
   if (!val) return;
   if (val.length !== 768) {
     const ns = document.getElementById('note-section');
